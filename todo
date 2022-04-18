@@ -8,3 +8,5 @@ NOTES:
       anything from a state without enemy observation
         - Idea: follow heuristic plan until first enemy observation occurs, then start training Q. Final Q policy will choose optimal action for all states besides, 0
           observation state. In that case, take random movement.
+          
+          RESULT: these changes increase non-enemy observations to ~4/10... much better information. also decrease evaluation to every 50 cycles
