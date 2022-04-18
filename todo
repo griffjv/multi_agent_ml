@@ -1,2 +1,10 @@
 1) test different parameters for Q-learning... explore different observation spaces and save results
 2) create adversary 'blue team' heuristic to learn/play against
+
+
+NOTES:
+  Q-learning
+    - Only ~1/3 of observations for any given training episode involve an enemy observed state... strive to make this number much larger because we are not going to learn
+      anything from a state without enemy observation
+        - Idea: follow heuristic plan until first enemy observation occurs, then start training Q. Final Q policy will choose optimal action for all states besides, 0
+          observation state. In that case, take random movement.
