@@ -10,3 +10,6 @@ NOTES:
           observation state. In that case, take random movement.
           
           RESULT: these changes increase non-enemy observations to ~4/10... much better information. also decrease evaluation to every 50 cycles
+
+
+Fix Q-learning to reflect the dictionary storage of previous states that is done in deep Q
