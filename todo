@@ -13,3 +13,4 @@ NOTES:
 
 
 Fix Q-learning to reflect the dictionary storage of previous states that is done in deep Q
+DQN algorithm complete... next step is to debug and work through each step
