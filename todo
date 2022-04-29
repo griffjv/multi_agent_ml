@@ -14,3 +14,6 @@ NOTES:
 
 Fix Q-learning to reflect the dictionary storage of previous states that is done in deep Q
 DQN algorithm complete... next step is to debug and work through each step
+
+
+328(really 160) episodes in around 2.5 hours... But at 328 blue agent hit DONE state!!!! that means it was eliminated, very promising
