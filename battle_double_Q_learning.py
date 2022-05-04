@@ -91,8 +91,7 @@ def battle_q_learning(environment, num_episodes,  alpha, preload_Q = {}, gamma=0
     i_ep = 0
 
     # modify the below if you want to train both agents
-    prev_state = -1
-    prev_action = -1
+
     total_learning_steps = 0
     while i_ep <= num_episodes:
         enemy_obs = 0
@@ -100,29 +99,35 @@ def battle_q_learning(environment, num_episodes,  alpha, preload_Q = {}, gamma=0
             maximum_iters = 1000
         else:
             maximum_iters = 0
+        prev_states = {}
+        prev_actions = {}
         for agent in environment.agent_iter(max_iter=maximum_iters):
             if environment.agent_selection[0] == 'r':
+
                 obs, reward, done, _ = environment.last(observe=True)
 
                 # assign state
                 parsed_obs = parse_observation(obs)
                 state = encode_state(parsed_obs)
-                enemy = np.sum(obs[3:10, 3:10, 3])
-                if enemy > 0:
-                    enemy_obs += 1
-                    # update Q_val-value
-                    if random.random() > .5:  # update Q_A
-                        Q_val_A = update_double_Q(Q_val_A, Q_val_B, environment.agent_selection, prev_state,
-                                                  prev_action, reward,
-                                                  alpha, gamma,
-                                                  current_state=state)
-                    else:  # update Q_B
+                if environment.agent_selection in prev_states:
+                    enemy = np.sum(obs[3:10, 3:10, 3])
+                    if enemy > 0:
+                        enemy_obs += 1
+                        # update Q_value
+                        prev_state = prev_states[environment.agent_selection]
+                        prev_action = prev_actions[environment.agent_selection]
+                        if random.random() > .5:  # update Q_A
+                            Q_val_A = update_double_Q(Q_val_A, Q_val_B, environment.agent_selection, prev_state,
+                                                      prev_action, reward,
+                                                      alpha, gamma,
+                                                      current_state=state)
+                        else:  # update Q_B
 
-                        Q_val_B = update_double_Q(Q_val_B, Q_val_A, environment.agent_selection, prev_state,
-                                                  prev_action, reward, alpha, gamma,
-                                                  current_state=state)
-
-                prev_state = state
+                            Q_val_B = update_double_Q(Q_val_B, Q_val_A, environment.agent_selection, prev_state,
+                                                      prev_action, reward, alpha, gamma,
+                                                      current_state=state)
+                else:
+                    enemy = 0
             else:
                 obs, reward, done, _ = environment.last(observe=False)
 
@@ -130,7 +135,8 @@ def battle_q_learning(environment, num_episodes,  alpha, preload_Q = {}, gamma=0
                 act = None
             elif environment.agent_selection[0] == 'r':
                 act = epsilon_greedy_policy(environment, agent, enemy, Q_val_A, state, epsilon)
-                prev_action = act
+                prev_actions[environment.agent_selection] = act
+                prev_states[environment.agent_selection] = state
             else:
                 act = random_policy(environment, environment.agent_selection)
             environment.step(act)
@@ -280,10 +286,10 @@ random.seed(123)
 env = battle_v3.env(map_size=12, minimap_mode=False, step_reward=-0.005,
                     dead_penalty=-0.1, attack_penalty=-0.1, attack_opponent_reward=0.2,
                     max_cycles=1000, extra_features=False)  # min size map
-full_run = 0
-continue_run = 1
+full_run = 1
+continue_run = 0
 env.reset()
-iterats = 20000
+iterats = 10000
 # train q
 if full_run == 1:
     Q, rewards_history, total_steps = battle_q_learning(env, iterats, 0.1)

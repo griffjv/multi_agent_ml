@@ -28,14 +28,17 @@ Sources: hash function generation - Gertjan Verhoeven
 
 class ReplayMemory(object):
     def __init__(self, capacity):
-        self.memory = deque([], maxlen=capacity)
+        self.memory = deque([],maxlen=capacity)
 
     def push(self, *args):
-        self.memory.append(Transition(*args))  # save transition to replay memory
+        """Save a transition"""
+        self.memory.append(Transition(*args))
+
+    def sample(self, batch_size):
+        return random.sample(self.memory, batch_size)
 
     def __len__(self):
         return len(self.memory)
-
 
 class DQN(nn.Module):
 
@@ -50,24 +53,39 @@ class DQN(nn.Module):
 
         self.head = nn.Linear(obs_size, outputs)
 
+        layer_sizes = [obs_size, 64, outputs]
+        layers = []
+        for index in range(len(layer_sizes)-1):
+            linear = nn.Linear(layer_sizes[index], layer_sizes[index+1])
+            act = nn.Tanh() if index < len(layer_sizes)-2 else nn.Identity()
+            layers += (linear, act)
+        self.network = nn.Sequential(*layers)
+
     # Called with either one element to determine next action, or a batch
     # during optimization. Returns tensor([[left0exp,right0exp]...]).
-    def forward(self, x):
-        x = x.to()
-        x = F.relu(self.bn1(self.conv1(x)))
-        x = F.relu(self.bn2(self.conv2(x)))
-        x = F.relu(self.bn3(self.conv3(x)))
-        return self.head(x.view(x.size(0), -1))
+ #   def forward(self, x):
+ #       x = x.to()
+ #       return self.head(self.network(x))
+
+
+def build_nn(obs_size, outputs):
+    layer_sizes = [obs_size, 64, outputs]
+    layers = []
+    for index in range(len(layer_sizes) - 1):
+        linear = nn.Linear(layer_sizes[index], layer_sizes[index + 1])
+        act = nn.Tanh() if index < len(layer_sizes) - 2 else nn.Identity()
+        layers += (linear, act)
+    return nn.Sequential(*layers)
 
 
 Transition = namedtuple('Transition', ('state', 'action', 'next_state', 'reward'))
 
 BATCH_SIZE = 128
 GAMMA = 0.999
-EPS_START = 0.9
+EPS_START = 0.95
 EPS_END = 0.05
-EPS_DECAY = 200
-TARGET_UPDATE = 10
+EPS_DECAY = 100
+TARGET_UPDATE = 20
 
 move_dict = {
     str([2, 0]): 0,
@@ -99,8 +117,8 @@ attack_dict = {
 
 def parse_observation(observation):
     # which layers to save, 1, 3
-    obs = np.zeros((7, 7, 1))
-    obs[:, :, 0] = observation[3:10, 3:10, 3]
+    obs = np.zeros((13, 13, 1))
+    obs[:, :, 0] = observation[:, :, 3]
     # obs[:, :, 1] = observation[:, :, 3]
     return obs
 
@@ -120,19 +138,21 @@ def random_policy(environment, agent):
     return environment.action_space(agent).sample()
 
 
-def select_action(state, steps_done, policy_net):
+def select_action(state, steps_done, policy_net, eps_thresh):
     sample = random.random()
     eps_threshold = EPS_END + (EPS_START - EPS_END) * \
                     math.exp(-1. * steps_done / EPS_DECAY)
     steps_done += 1
-    if sample > eps_threshold:
+    if sample > eps_thresh:
         with torch.no_grad():
             # t.max(1) will return largest column value of each row.
             # second column on max result is index of where max element was
             # found, so we pick action with the larger expected reward.
-            return policy_net(state).max(1)[1].view(1, 1)
+            Qp = policy_net(state.float())
+            Q,A = torch.max(Qp, axis=0)
+            return A
     else:
-        return torch.tensor([[random.randrange(21)]], dtype=torch.long)
+        return torch.tensor(random.randrange(21), dtype=torch.int)
 
 
 def optimize_model(memory, target_net, policy_net, optimizer):
@@ -146,44 +166,48 @@ def optimize_model(memory, target_net, policy_net, optimizer):
 
     # Compute a mask of non-final states and concatenate the batch elements
     # (a final state would've been the one after which simulation ended)
-    non_final_mask = torch.tensor(tuple(map(lambda s: s is not None,
-                                            batch.next_state)), dtype=torch.bool)
-    non_final_next_states = torch.cat([s for s in batch.next_state
-                                       if s is not None])
-    state_batch = torch.cat(batch.state)
-    action_batch = torch.cat(batch.action)
     reward_batch = torch.cat(batch.reward)
 
     # Compute Q(s_t, a) - the model computes Q(s_t), then we select the
     # columns of actions taken. These are the actions which would've been taken
     # for each batch state according to policy_net
-    state_action_values = policy_net(state_batch).gather(1, action_batch)
+    state_values = torch.empty((BATCH_SIZE), dtype=float)
+    next_state_values = torch.empty((BATCH_SIZE), dtype=float)
+    for i in range(BATCH_SIZE):
+        qp = policy_net(batch.state[i].float())
+        pred_return, _ = torch.max(qp, axis=0)
 
-    # Compute V(s_{t+1}) for all next states.
-    # Expected values of actions for non_final_next_states are computed based
-    # on the "older" target_net; selecting their best reward with max(1)[0].
-    # This is merged based on the mask, such that we'll have either the expected
-    # state value or 0 in case the state was final.
-    next_state_values = torch.zeros(BATCH_SIZE)
-    next_state_values[non_final_mask] = target_net(non_final_next_states).max(1)[0].detach()
+        qt = target_net(batch.next_state[i].float())
+        pred_return2, _ = torch.max(qt, axis=0)
+        n_value = (pred_return2 * GAMMA) + batch.reward[i]
+
+        state_values[i] = pred_return
+        next_state_values[i] = n_value
+    #next_state_values = torch.zeros(BATCH_SIZE)
+    #next_state_values[non_final_mask] = target_net(non_final_next_states).max(1)[0].detach()
     # Compute the expected Q values
     expected_state_action_values = (next_state_values * GAMMA) + reward_batch
 
     # Compute Huber loss
-    criterion = nn.SmoothL1Loss()
-    loss = criterion(state_action_values, expected_state_action_values.unsqueeze(1))
+    criterion = nn.MSELoss()
+    loss = criterion(state_values, expected_state_action_values)
 
     # Optimize the model
     optimizer.zero_grad()
     loss.backward()
-    for param in policy_net.parameters():
-        param.grad.data.clamp_(-1, 1)
     optimizer.step()
+
+    return loss.item()
 
 
 def dqn(env, memory, target_net, policy_net, optimizer, num_episodes=12):
     steps_done = 0
+    loss_history = []
+    reward_history = []
+    blues_defeated = 0
+    eps_thresh = 0.95
     for i_episode in range(num_episodes):
+        print("Episode Number: ", i_episode)
         # Create dictionary to store prev states
         prev_states = {}
         prev_actions = {}
@@ -198,24 +222,31 @@ def dqn(env, memory, target_net, policy_net, optimizer, num_episodes=12):
             maximum_iters = 1000
         else:
             maximum_iters = 0
+        total_reward = 0
         for agent in env.agent_iter(max_iter=maximum_iters):
             if env.agent_selection[0] == 'r':
                 agent_sel = env.agent_selection
                 if agent_sel in prev_states:
                     # previous step
-                    obs, reward, _, _ = env.last(observe=True)
+                    obs, reward, done, _ = env.last(observe=True)
+                    total_reward += reward
                     reward = torch.tensor([reward])
                     next_state = torch.from_numpy(observation_to_input(parse_observation(obs)))
                     # Store the transition in memory
                     memory.push(prev_states[agent_sel], prev_actions[agent_sel], next_state, reward)
 
                     # Perform one step of the optimization (on the policy network)
-                    optimize_model(memory, target_net, policy_net, optimizer)
+                    loss = optimize_model(memory, target_net, policy_net, optimizer)
                     steps_done += 1
 
                     # Select and perform an action
-                    action = select_action(state, steps_done, policy_net)
-                    env.step(action.numpy()[0][0])
+                    if done:
+                        #action = None
+                        env.step(None)
+                    else:
+                        action = select_action(next_state, steps_done, policy_net, eps_thresh)
+                        #print("Action: ", action.item())
+                        env.step(action.item())
 
                     # Increment
                     prev_actions[agent_sel] = action
@@ -226,21 +257,36 @@ def dqn(env, memory, target_net, policy_net, optimizer, num_episodes=12):
                     env.step(action)
                     obs, _, _, _ = env.last(observe=True)
                     env.step(action)
-                    prev_actions[agent_sel] = torch.from_numpy(np.array([[action]]))
+                    prev_actions[agent_sel] = torch.tensor(action)
                     prev_states[agent_sel] = torch.from_numpy(observation_to_input(parse_observation(obs)))
             else:
-                blue_action = random_policy(env, env.agent_selection)
+                _, _, done, _ = env.last(observe=False)
+                if done:
+                    blue_action = None
+                    blues_defeated += 1
+                else:
+                    blue_action = random_policy(env, env.agent_selection)
                 env.step(blue_action)
 
+        if i_episode % 2 == 0:
+            print("Reward: ", total_reward)
+            print("Loss: ", loss)
+            print("Blue Defeated: ", blues_defeated)
+            env.close()
+            env.render()
+            loss_history.append(loss)
+            reward_history.append(total_reward)
+            eps_thresh -= 2/num_episodes
+            eps_thresh = max(0.05, eps_thresh)
         # Update the target network, copying all weights and biases in DQN
         if i_episode % TARGET_UPDATE == 0:
             target_net.load_state_dict(policy_net.state_dict())
-    return target_net, policy_net
+    return target_net, policy_net, loss_history, reward_history
 
 
 def main():
     # setup environment
-    env = battle_v3.env(map_size=12, minimap_mode=False, step_reward=-0.005,
+    env = battle_v3.env(map_size=20, minimap_mode=False, step_reward=-0.005,
                         dead_penalty=-0.1, attack_penalty=-0.1, attack_opponent_reward=0.2,
                         max_cycles=1000, extra_features=False)  # min size map
     env.reset()
@@ -248,21 +294,39 @@ def main():
     parsed_obs = parse_observation(test_obs)
     input_obs = observation_to_input(parsed_obs)
     n_actions = 21  # predefined
-
+    env.render()
+    time.sleep(2)
     # setup DQN model
-    # TODO: Change layers of DQN to not use convolutional layers... since input is just a vec
-    policy_net = DQN(input_obs.size, n_actions).to()
-    target_net = DQN(input_obs.size, n_actions).to()
+    # policy_net = DQN(input_obs.size, n_actions).to()
+    # target_net = DQN(input_obs.size, n_actions).to()
+    policy_net = build_nn(input_obs.size, n_actions)
+    target_net = build_nn(input_obs.size, n_actions)
     target_net.load_state_dict(policy_net.state_dict())
     target_net.eval()
 
-    optimizer = optim.RMSprop(policy_net.parameters())
+    optimizer = optim.Adam(policy_net.parameters())
     memory = ReplayMemory(10000)
-
-    target, policy = dqn(env, memory, target_net, policy_net, optimizer, num_episodes=100)
+    iterats = 750
+    target, policy, loss_history, reward_history = dqn(env, memory, target_net, policy_net, optimizer, num_episodes=iterats)
 
     print("Completed")
+    x_points = np.linspace(0, (iterats/2), int(iterats/2))
 
+    plt.plot(x_points, reward_history)
+    plt.xlabel('DQN Episodes')
+    plt.ylabel('Reward')
+    plt.title('Deep Q-Network Learning')
+    plt.savefig('Reward_DQN.png')
+    plt.show()
+
+    plt.plot(x_points, loss_history)
+    plt.xlabel('DQN Episodes')
+    plt.ylabel('Policy Loss')
+    plt.title('Deep Q-Network Learning')
+    plt.show()
+
+    with open('policy_net.pkl', 'wb') as f:
+        dill.dump(policy_net, f)
 
 if __name__ == '__main__':
     main()

@@ -3,7 +3,7 @@ import time
 from pettingzoo.utils import average_total_reward, random_demo
 import random
 import numpy as np
-
+import statistics
 
 move_dict = {
     str([2, 0]): 0,
@@ -94,7 +94,7 @@ def average_red_reward(environ, red_policy, blue_policy, max_episodes=100, max_s
     total_reward = 0
     total_steps = 0
     done = False
-
+    rewards = []
     for episode in range(max_episodes):
         if total_steps >= max_steps:
             break
@@ -102,13 +102,15 @@ def average_red_reward(environ, red_policy, blue_policy, max_episodes=100, max_s
         environ.reset()
         # run for red but not blue
         if episode%2==0:
-            max_iterations = 10000
+            max_iterations = 1600
         else:
             max_iterations = 0
+        local_total_reward = 0
         for agent in environ.agent_iter(max_iter=max_iterations):
             obs, reward, done, _ = environ.last(observe=False)
             if (environ.agent_selection[0] == 'r'):
                 total_reward += reward
+                local_total_reward+=reward
                 total_steps += 1
             if done:
                 a = None
@@ -122,13 +124,14 @@ def average_red_reward(environ, red_policy, blue_policy, max_episodes=100, max_s
             environ.step(a)
             #environ.render()
             #time.sleep(.02)
+        rewards.append(local_total_reward)
         num_episodes = episode + 1
     print("Average red reward", total_reward / (num_episodes/2))
 
-    return total_reward / (num_episodes/2)
+    return total_reward / (num_episodes/2), statistics.stdev(rewards)
 
 
-env = battle_v3.env(map_size=24, minimap_mode=False, step_reward=-0.005,
+env = battle_v3.env(map_size=20, minimap_mode=False, step_reward=-0.005,
                     dead_penalty=-0.1, attack_penalty=-0.1, attack_opponent_reward=0.2,
                     max_cycles=1000, extra_features=False)  # min size map
 env.reset()
@@ -146,6 +149,6 @@ action = random_policy(env, env.agent_selection)
 
 # avg_reward = average_total_reward(env, max_episodes=100, max_steps=10000)
 env.reset()
-avg_red_reward = average_red_reward(env, heuristic_policy, random_policy, max_episodes=200, max_steps=100000)
-
-avg_red_reward = average_red_reward(env, heuristic_policy, random_policy, max_episodes=200, max_steps=100000)
+avg_red_reward, std_dev_red = average_red_reward(env, heuristic_policy, random_policy, max_episodes=200, max_steps=100000)
+print("Reward stand dev: ", std_dev_red)
+avg_red_reward, std_dev_red = average_red_reward(env, heuristic_policy, random_policy, max_episodes=200, max_steps=100000)
